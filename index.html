@@ -728,6 +728,7 @@
             };
             const avg = (a) => (a.length ? a.reduce((x, y) => x + y, 0) / a.length : null);
             const pct = (a, b) => (b ? (100 * a) / b : null);
+            const ratio = (a, b) => (b ? a / b : null);
             const num = (v) => Number(v) || 0;
             const fmtInt = (v) => (v == null ? '--' : Math.round(v).toLocaleString('en-US'));
             const fmtPct = (v) => (v == null ? '--' : v.toFixed(1) + '%');
@@ -749,19 +750,26 @@
                 const idx = new Map((file.columns || []).map((c, i) => [c.name, i])),
                     get = (r, k) => (idx.has(k) ? r[idx.get(k)] : null);
                 return (file.preview || [])
-                    .map((r) => ({
-                        id: text(get(r, '用户id')),
+                    .map((r, rowIndex) => ({
+                        id: text(get(r, '用户id')) || `C${rowIndex + 1}`,
                         apply: parseTs(get(r, '交单时间')),
                         os: text(get(r, '手机系统')) || text(get(r, '平台')) || 'UNKNOWN',
                         media: text(get(r, 'media_source')) || text(get(r, '媒体')) || 'UNKNOWN',
                         new: text(get(r, '是否当天注册')) === 'Y',
-                        passed: text(get(r, '是否授信通过')) === 'Y',
+                        passed: num(get(r, '授信通过人数')) > 0 || text(get(r, '是否授信通过')) === 'Y',
                         pass: parseTs(get(r, '授信通过时间')),
                         amount: num(get(r, '授信额度')),
                         product: text(get(r, '产品')) || 'UNKNOWN',
                         risk: text(get(r, '风险等级')) || 'UNKNOWN',
-                        withdraw: text(get(r, '是否通过当天提现')) === 'Y',
-                        withdrawTs: parseTs(get(r, '通过当天首次提现时间')),
+                        withdraw: num(get(r, '提现申请人数')) > 0 || text(get(r, '是否通过当天提现')) === 'Y',
+                        withdrawTs: parseTs(get(r, '提现申请时间')) || parseTs(get(r, '通过当天首次提现时间')),
+                        submitCount: num(get(r, '交单人数')) || 1,
+                        passCount: num(get(r, '授信通过人数')) || (text(get(r, '是否授信通过')) === 'Y' ? 1 : 0),
+                        withdrawCount: num(get(r, '提现申请人数')) || (text(get(r, '是否通过当天提现')) === 'Y' ? 1 : 0),
+                        passAmtSum: num(get(r, '授信通过额度合计')) || (num(get(r, '授信额度')) > 0 ? num(get(r, '授信额度')) : 0),
+                        passAmtCount: num(get(r, '授信通过有效额度人数')) || (num(get(r, '授信额度')) > 0 && text(get(r, '是否授信通过')) === 'Y' ? 1 : 0),
+                        withdrawAmtSum: num(get(r, '提现客户授信额度合计')) || (num(get(r, '授信额度')) > 0 && text(get(r, '是否通过当天提现')) === 'Y' ? num(get(r, '授信额度')) : 0),
+                        withdrawAmtCount: num(get(r, '提现客户有效额度人数')) || (num(get(r, '授信额度')) > 0 && text(get(r, '是否通过当天提现')) === 'Y' ? 1 : 0),
                     }))
                     .filter((r) => r.id && r.apply);
             }
@@ -769,11 +777,11 @@
                 const idx = new Map((file.columns || []).map((c, i) => [c.name, i])),
                     get = (r, k) => (idx.has(k) ? r[idx.get(k)] : null);
                 return (file.preview || [])
-                    .map((r) => {
-                        const submitted = text(get(r, '是否交单')) === 'Y';
+                    .map((r, rowIndex) => {
+                        const submitted = num(get(r, '交单人数')) > 0 || text(get(r, '是否交单')) === 'Y';
                         const noSubmit = '00_未交单';
                         return {
-                            id: text(get(r, '用户id')),
+                            id: text(get(r, '用户id')) || `R${rowIndex + 1}`,
                             register: parseTs(get(r, '注册时间')),
                             os: text(get(r, '平台')) || 'UNKNOWN',
                             media: text(get(r, '媒体')) || 'UNKNOWN',
@@ -786,6 +794,8 @@
                             workYears: submitted ? text(get(r, '工作年限标签')) || '03_<=5年/空值' : noSubmit,
                             submitted,
                             submit: parseTs(get(r, '首次交单时间')),
+                            registerCount: num(get(r, '注册人数')) || 1,
+                            submitCount: num(get(r, '交单人数')) || (submitted ? 1 : 0),
                         };
                     })
                     .filter((r) => r.id && r.register);
@@ -832,9 +842,12 @@
                     return {
                         base,
                         submitted,
-                        registerN: base.length,
-                        submitN: submitted.length,
-                        submitRate: pct(submitted.length, base.length),
+                        registerN: base.reduce((sum, r) => sum + r.registerCount, 0),
+                        submitN: submitted.reduce((sum, r) => sum + r.submitCount, 0),
+                        submitRate: pct(
+                            submitted.reduce((sum, r) => sum + r.submitCount, 0),
+                            base.reduce((sum, r) => sum + r.registerCount, 0),
+                        ),
                     };
                 }
                 const base = rows.filter((r) => r.apply.date === date && r.apply.minute <= state.cutoff),
@@ -846,13 +859,17 @@
                     base,
                     pass,
                     wd,
-                    submit: base.length,
-                    passN: pass.length,
-                    wdN: wd.length,
-                    passRate: pct(pass.length, base.length),
-                    wdRate: pct(wd.length, pass.length),
-                    passAmt: avg(pass.filter((r) => r.amount > 0).map((r) => r.amount)),
-                    wdAmt: avg(wd.filter((r) => r.amount > 0).map((r) => r.amount)),
+                    submit: base.reduce((sum, r) => sum + r.submitCount, 0),
+                    passN: pass.reduce((sum, r) => sum + r.passCount, 0),
+                    wdN: wd.reduce((sum, r) => sum + r.withdrawCount, 0),
+                    passRate: pct(pass.reduce((sum, r) => sum + r.passCount, 0), base.reduce((sum, r) => sum + r.submitCount, 0)),
+                    wdRate: pct(wd.reduce((sum, r) => sum + r.withdrawCount, 0), pass.reduce((sum, r) => sum + r.passCount, 0)),
+                    passAmtSum: pass.reduce((sum, r) => sum + r.passAmtSum, 0),
+                    passAmtCount: pass.reduce((sum, r) => sum + r.passAmtCount, 0),
+                    wdAmtSum: wd.reduce((sum, r) => sum + r.withdrawAmtSum, 0),
+                    wdAmtCount: wd.reduce((sum, r) => sum + r.withdrawAmtCount, 0),
+                    passAmt: ratio(pass.reduce((sum, r) => sum + r.passAmtSum, 0), pass.reduce((sum, r) => sum + r.passAmtCount, 0)),
+                    wdAmt: ratio(wd.reduce((sum, r) => sum + r.withdrawAmtSum, 0), wd.reduce((sum, r) => sum + r.withdrawAmtCount, 0)),
                 };
             }
             function metrics() {
@@ -888,8 +905,8 @@
                             hist.reduce((a, x) => a + x.wdN, 0),
                             hist.reduce((a, x) => a + x.passN, 0),
                         ),
-                        passAmt: avg(hist.flatMap((x) => x.pass.filter((r) => r.amount > 0).map((r) => r.amount))),
-                        wdAmt: avg(hist.flatMap((x) => x.wd.filter((r) => r.amount > 0).map((r) => r.amount))),
+                        passAmt: ratio(hist.reduce((a, x) => a + x.passAmtSum, 0), hist.reduce((a, x) => a + x.passAmtCount, 0)),
+                        wdAmt: ratio(hist.reduce((a, x) => a + x.wdAmtSum, 0), hist.reduce((a, x) => a + x.wdAmtCount, 0)),
                     },
                 };
             }
@@ -900,13 +917,20 @@
                                 ? r.register.date === date
                                 : r.new && r.apply.date === date && r.passed && r.pass?.date === date,
                         )
-                        .map((r) => (state.mode === 'registration' ? r.register.minute : r.pass.minute))
-                        .sort((a, b) => a - b),
+                        .map((r) => ({
+                            minute: state.mode === 'registration' ? r.register.minute : r.pass.minute,
+                            count: state.mode === 'registration' ? r.registerCount : r.passCount,
+                        }))
+                        .sort((a, b) => a.minute - b.minute),
                     out = [];
-                let j = 0;
+                let j = 0,
+                    running = 0;
                 for (let m = 0; m <= 1440; m += step) {
-                    while (j < events.length && events[j] <= m) j++;
-                    out.push(j);
+                    while (j < events.length && events[j].minute <= m) {
+                        running += events[j].count;
+                        j++;
+                    }
+                    out.push(running);
                 }
                 return out;
             }
@@ -1117,8 +1141,8 @@
                                 structureImpact == null || conversionImpact == null
                                     ? null
                                     : structureImpact + conversionImpact,
-                            histPassAmt = avg(hs.flatMap((x) => x.pass.filter((r) => r.amount > 0).map((r) => r.amount))),
-                            histWdAmt = avg(hs.flatMap((x) => x.wd.filter((r) => r.amount > 0).map((r) => r.amount)));
+                            histPassAmt = ratio(hs.reduce((a, x) => a + x.passAmtSum, 0), hs.reduce((a, x) => a + x.passAmtCount, 0)),
+                            histWdAmt = ratio(hs.reduce((a, x) => a + x.wdAmtSum, 0), hs.reduce((a, x) => a + x.wdAmtCount, 0));
                         return {
                             v,
                             t,
@@ -1156,8 +1180,8 @@
                 const structureTotal = data.reduce((sum, x) => sum + (x.structureImpact || 0), 0);
                 const conversionTotal = data.reduce((sum, x) => sum + (x.conversionImpact || 0), 0);
                 const impactTotal = data.reduce((sum, x) => sum + (x.totalImpact || 0), 0);
-                const histPassAmt = avg(hist.flatMap((x) => x.pass.filter((r) => r.amount > 0).map((r) => r.amount)));
-                const histWdAmt = avg(hist.flatMap((x) => x.wd.filter((r) => r.amount > 0).map((r) => r.amount)));
+                const histPassAmt = ratio(hist.reduce((a, x) => a + x.passAmtSum, 0), hist.reduce((a, x) => a + x.passAmtCount, 0));
+                const histWdAmt = ratio(hist.reduce((a, x) => a + x.wdAmtSum, 0), hist.reduce((a, x) => a + x.wdAmtCount, 0));
                 $('dimension-summary').innerHTML = data.length
                     ? `<tr class="summary-row"><td>整体汇总</td><td>${fmtInt(todayAll.passN)}</td><td>${fmtPct(100)}</td><td>${fmtInt(avg(hist.map((x) => x.passN)))}</td><td>${fmtPct(100)}</td><td>${fmtInt(todayAll.wdN)}</td><td>${fmtPct(100)}</td><td>${fmtPct(todayAll.wdRate)}</td><td>${fmtPct(baseRate)}</td><td>${delta(todayAll.wdRate, baseRate, 'pp')}</td><td>${impact(structureTotal)}</td><td>${impact(conversionTotal)}</td><td>${impact(impactTotal)}</td><td>${fmtPct(100)}</td><td>${fmtAmt(todayAll.passAmt)}</td><td>${fmtAmt(histPassAmt)}</td><td>${fmtAmt(todayAll.wdAmt)}</td><td>${fmtAmt(histWdAmt)}</td></tr>`
                     : '';
@@ -1214,8 +1238,8 @@
                             t = cohort(subset, state.today),
                             hs = state.prev7.map((d) => cohort(subset, d)),
                             histPass = hs.reduce((a, x) => a + x.passN, 0),
-                            histPassAmt = avg(hs.flatMap((x) => x.pass.filter((r) => r.amount > 0).map((r) => r.amount))),
-                            histWdAmt = avg(hs.flatMap((x) => x.wd.filter((r) => r.amount > 0).map((r) => r.amount)));
+                            histPassAmt = ratio(hs.reduce((a, x) => a + x.passAmtSum, 0), hs.reduce((a, x) => a + x.passAmtCount, 0)),
+                            histWdAmt = ratio(hs.reduce((a, x) => a + x.wdAmtSum, 0), hs.reduce((a, x) => a + x.wdAmtCount, 0));
                         return {
                             v,
                             t,
